@@ -12,10 +12,12 @@ This module implements a LangGraph workflow that:
 import os
 import json
 from typing import Literal, TypedDict, Annotated
+from langgraph.graph.message import add_messages
 from dotenv import load_dotenv
 
 from langgraph.graph import StateGraph, END
-from langgraph.graph.message import add_messages
+from langgraph.checkpoint.memory import InMemorySaver
+from langchain_core.messages import HumanMessage, AIMessage
 
 from intent_classifier import IntentClassifier
 from query_rewriter import QueryRewriter
@@ -27,6 +29,7 @@ load_dotenv()
 
 class AgentState(TypedDict):
     """State schema for the LangGraph workflow."""
+    messages: Annotated[list, add_messages]  # Conversation history with reducer
     user_query: str
     intent: Literal["disease", "scheme", "hybrid"] | None
     confidence: float | None
@@ -50,9 +53,12 @@ class AgricultureChatbotGraph:
         self.query_rewriter = QueryRewriter()
         self.retrieval_system = RetrievalSystem()
         
+        # Initialize checkpointer for conversation history
+        self.checkpointer = InMemorySaver()
+        
         # Build the graph
         self.graph = self._build_graph()
-        self.app = self.graph.compile()
+        self.app = self.graph.compile(checkpointer=self.checkpointer)
     
     def print_graph(self):
         """Print the LangGraph workflow structure."""
@@ -126,7 +132,12 @@ class AgricultureChatbotGraph:
         Returns:
             Updated state with intent classification
         """
-        user_query = state["user_query"]
+        # Get user query from messages or state
+        messages = state.get("messages", [])
+        if messages:
+            user_query = messages[-1].content if hasattr(messages[-1], 'content') else str(messages[-1])
+        else:
+            user_query = state.get("user_query", "")
         
         print(f"\n[Classify Intent Node] Processing query: {user_query}")
         
@@ -137,6 +148,7 @@ class AgricultureChatbotGraph:
         
         # Prepare state update
         state_update = {
+            "user_query": user_query,
             "intent": classification["intent"],
             "confidence": classification["confidence"],
             "reasoning": classification["reasoning"]
@@ -205,12 +217,22 @@ class AgricultureChatbotGraph:
             state: Current agent state
             
         Returns:
-            Updated state with response and retrieved documents
+            Updated state with response (Document objects are not stored in state due to serialization limits)
         """
         user_query = state["user_query"]
         intent = state.get("intent")
         disease_query = state.get("disease_query")
         scheme_query = state.get("scheme_query")
+        
+        # Get conversation history from messages
+        messages = state.get("messages", [])
+        conversation_history = []
+        for msg in messages[:-1]:  # Exclude current message
+            if isinstance(msg, (HumanMessage, AIMessage)):
+                conversation_history.append({
+                    "role": "user" if isinstance(msg, HumanMessage) else "assistant",
+                    "content": msg.content if hasattr(msg, 'content') else str(msg)
+                })
         
         print(f"\n[Retrieve & Generate Node] Intent: {intent}")
         print(f"[Retrieve & Generate Node] Processing query: {user_query}")
@@ -220,48 +242,78 @@ class AgricultureChatbotGraph:
             query=user_query,
             intent=intent,
             disease_query=disease_query,
-            scheme_query=scheme_query
+            scheme_query=scheme_query,
+            conversation_history=conversation_history if conversation_history else None
         )
         
         print(f"[Retrieve & Generate Node] Retrieved {result['num_disease_docs']} disease docs, {result['num_scheme_docs']} scheme docs")
-        print(f"[Retrieve & Generate Node] Generated response ({len(result['response'])} chars)")
+        if result.get('response'):
+            print(f"[Retrieve & Generate Node] Generated response ({len(result['response'])} chars)")
         
-        # Update state
-        return {
-            "response": result["response"],
+        # Store documents temporarily (they can't be serialized in checkpointer state)
+        # Store them in the graph instance for retrieval after invoke
+        self._temp_retrieval_result = {
             "disease_docs": result.get("disease_docs"),
             "scheme_docs": result.get("scheme_docs"),
+            "context": result.get("context")
+        }
+        
+        # Add AI response to messages
+        response_text = result.get("response", "")
+        new_messages = []
+        if response_text:
+            new_messages.append(AIMessage(content=response_text))
+        
+        # Update state - Don't include Document objects (they can't be serialized)
+        # Store only serializable fields
+        return {
+            "messages": new_messages,
+            "response": response_text,
             "num_disease_docs": result["num_disease_docs"],
             "num_scheme_docs": result["num_scheme_docs"]
         }
     
-    def process_query(self, user_query: str) -> dict:
-        """Process a user query through the graph.
+    def process_query(self, user_query: str, thread_id: str = "default") -> dict:
+        """Process a user query through the graph with conversation history.
         
         Args:
             user_query: The farmer's query/question
+            thread_id: Thread ID for conversation history (default: "default")
             
         Returns:
             Dictionary containing the complete processing result
         """
-        # Initial state
-        initial_state = AgentState(
-            user_query=user_query,
-            intent=None,
-            confidence=None,
-            reasoning=None,
-            disease_query=None,
-            scheme_query=None,
-            rewrite_reasoning=None,
-            response=None,
-            disease_docs=None,
-            scheme_docs=None,
-            num_disease_docs=None,
-            num_scheme_docs=None
-        )
+        # Create human message
+        human_message = HumanMessage(content=user_query)
         
-        # Run the graph
-        result = self.app.invoke(initial_state)
+        # Initial state with message
+        initial_state = {
+            "messages": [human_message],
+            "user_query": user_query,
+            "intent": None,
+            "confidence": None,
+            "reasoning": None,
+            "disease_query": None,
+            "scheme_query": None,
+            "rewrite_reasoning": None,
+            "response": None,
+            "disease_docs": None,
+            "scheme_docs": None,
+            "num_disease_docs": None,
+            "num_scheme_docs": None
+        }
+        
+        # Run the graph with thread_id for conversation history
+        config = {"configurable": {"thread_id": thread_id}}
+        result = self.app.invoke(initial_state, config)
+        
+        # Add Document objects from temporary storage (not stored in checkpointer state)
+        result["disease_docs"] = self._temp_retrieval_result.get("disease_docs")
+        result["scheme_docs"] = self._temp_retrieval_result.get("scheme_docs")
+        result["context"] = self._temp_retrieval_result.get("context")
+        
+        # Clear temporary storage
+        self._temp_retrieval_result = {}
         
         return result
 
@@ -298,7 +350,9 @@ def main():
         print(f"{'='*80}")
         
         try:
-            result = chatbot.process_query(query)
+            # Use same thread_id for all queries in test to show conversation history
+            thread_id = "test-session-1"
+            result = chatbot.process_query(query, thread_id=thread_id)
             
             print(f"\n📊 Final Result:")
             print(f"  Intent: {result.get('intent')}")
@@ -315,14 +369,42 @@ def main():
             print(f"    Disease Docs: {result.get('num_disease_docs', 0)}")
             print(f"    Scheme Docs: {result.get('num_scheme_docs', 0)}")
             
+            # Show retrieved document content
+            if result.get('disease_docs'):
+                print(f"\n  📄 Disease Documents Content:")
+                for i, doc in enumerate(result['disease_docs'][:3], 1):  # Show first 3
+                    content = doc.page_content[:300] if len(doc.page_content) > 300 else doc.page_content
+                    print(f"\n    [Disease Doc {i}]")
+                    print(f"    {content}{'...' if len(doc.page_content) > 300 else ''}")
+                    if doc.metadata:
+                        print(f"    Metadata: {doc.metadata.get('source', 'Unknown')}")
+            
+            if result.get('scheme_docs'):
+                print(f"\n  📄 Scheme Documents Content:")
+                for i, doc in enumerate(result['scheme_docs'][:3], 1):  # Show first 3
+                    content = doc.page_content[:300] if len(doc.page_content) > 300 else doc.page_content
+                    print(f"\n    [Scheme Doc {i}]")
+                    print(f"    {content}{'...' if len(doc.page_content) > 300 else ''}")
+                    if doc.metadata:
+                        print(f"    Metadata: {doc.metadata.get('source', 'Unknown')}")
+            
+            # Show formatted context
+            if result.get('context'):
+                print(f"\n  📝 Formatted Context (from vector DB):")
+                context = result['context']
+                if len(context) > 1000:
+                    print(f"    {context[:1000]}...")
+                    print(f"    ... (truncated, total length: {len(context)} chars)")
+                else:
+                    print(f"    {context}")
+            
             print(f"\n  💬 Generated Response:")
             response_text = result.get('response', 'N/A')
             if response_text and response_text != 'N/A':
-                # Print first 500 chars, then ...
-                if len(response_text) > 500:
-                    print(f"    {response_text[:500]}...")
-                else:
-                    print(f"    {response_text}")
+                # Print full response
+                print(f"    {response_text}")
+            else:
+                print(f"    (Response generation disabled - see retrieved documents above)")
             
             print(f"\n  📄 Complete JSON Output:")
             # Convert documents to summary for JSON output (documents can be large)

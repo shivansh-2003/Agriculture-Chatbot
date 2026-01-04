@@ -21,7 +21,7 @@ from dotenv import load_dotenv
 
 from langchain_community.document_loaders import TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_openai import OpenAIEmbeddings
 from langchain_pinecone import PineconeVectorStore
 from pinecone import Pinecone, ServerlessSpec
 import tqdm
@@ -32,10 +32,10 @@ load_dotenv()
 # Configuration
 CHUNK_SIZE = 1000  # tokens (approximately 1000 chars for English)
 CHUNK_OVERLAP = 200  # tokens for overlap
-EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"  # Hugging Face embedding model
+EMBEDDING_MODEL = "text-embedding-ada-002"  # OpenAI embedding model
 
-# Text documents
-TEXT_DIR = Path(__file__).parent.parent
+# Text documents (in the same directory as this script)
+TEXT_DIR = Path(__file__).parent
 CITRUS_TXT = TEXT_DIR / "CitrusPlantPestsAndDiseases.txt"
 SCHEMES_TXT = TEXT_DIR / "GovernmentSchemes.txt"
 
@@ -54,7 +54,7 @@ def initialize_pinecone() -> Pinecone:
     return pc
 
 def create_pinecone_index(pc: Pinecone, index_name: str, dimension: int = 1536):
-    """Create Pinecone index if it doesn't exist."""
+    """Create Pinecone index if it doesn't exist, or recreate if dimension mismatch."""
     existing_indexes = [index.name for index in pc.list_indexes()]
     
     if index_name not in existing_indexes:
@@ -73,7 +73,34 @@ def create_pinecone_index(pc: Pinecone, index_name: str, dimension: int = 1536):
         import time
         time.sleep(2)
     else:
-        print(f"Index {index_name} already exists")
+        # Check if existing index has correct dimension
+        index_info = pc.describe_index(index_name)
+        existing_dimension = index_info.dimension
+        
+        if existing_dimension != dimension:
+            print(f"⚠️  Index {index_name} exists but has wrong dimension ({existing_dimension} vs {dimension})")
+            print(f"Deleting existing index {index_name}...")
+            pc.delete_index(index_name)
+            
+            # Wait for deletion to complete
+            import time
+            while index_name in [idx.name for idx in pc.list_indexes()]:
+                time.sleep(1)
+            
+            print(f"Creating new index {index_name} with dimension {dimension}...")
+            pc.create_index(
+                name=index_name,
+                dimension=dimension,
+                metric="cosine",
+                spec=ServerlessSpec(
+                    cloud="aws",
+                    region="us-east-1"
+                )
+            )
+            print(f"Index {index_name} recreated successfully")
+            time.sleep(2)
+        else:
+            print(f"Index {index_name} already exists with correct dimension ({dimension})")
 
 def load_text_file(txt_path: Path) -> List[Any]:
     """Load text file using LangChain TextLoader."""
@@ -122,7 +149,7 @@ def ingest_documents(
     txt_path: Path,
     index_name: str,
     collection_type: str,
-    embeddings: HuggingFaceEmbeddings,
+    embeddings: OpenAIEmbeddings,
     pc: Pinecone,
     embedding_dimension: int
 ):
@@ -165,19 +192,19 @@ def main():
     if not PINECONE_API_KEY:
         raise ValueError("PINECONE_API_KEY not found in environment variables")
     
-    # Initialize embeddings (Hugging Face - no API key needed)
-    print("Initializing Hugging Face embeddings model...")
+    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+    if not OPENAI_API_KEY:
+        raise ValueError("OPENAI_API_KEY not found in environment variables")
+    
+    # Initialize OpenAI embeddings
+    print("Initializing OpenAI embeddings model...")
     print(f"Model: {EMBEDDING_MODEL}")
-    embeddings = HuggingFaceEmbeddings(
-        model_name=EMBEDDING_MODEL,
-        model_kwargs={'device': 'cpu'},  # Use 'cuda' if GPU available
-        encode_kwargs={'normalize_embeddings': True}  # Normalize for better cosine similarity
+    embeddings = OpenAIEmbeddings(
+        model=EMBEDDING_MODEL
     )
     
-    # Get embedding dimension (test once)
-    print("Detecting embedding dimension...")
-    test_embedding = embeddings.embed_query("test")
-    embedding_dimension = len(test_embedding)
+    # OpenAI text-embedding-ada-002 has 1536 dimensions
+    embedding_dimension = 1536
     print(f"Embedding dimension: {embedding_dimension}")
     
     # Initialize Pinecone

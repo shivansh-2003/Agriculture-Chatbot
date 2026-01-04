@@ -19,6 +19,7 @@ from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_pinecone import PineconeVectorStore
 from langchain_core.documents import Document
 from langchain_community.document_compressors import FlashrankRerank
+from response import ResponseGenerator
 
 # Load environment variables
 load_dotenv()
@@ -65,6 +66,12 @@ class RetrievalSystem:
         self.schemes_vectorstore = PineconeVectorStore(
             index_name=PINECONE_INDEX_NAME_SCHEMES,
             embedding=self.embeddings
+        )
+        
+        # Initialize response generator
+        self.response_generator = ResponseGenerator(
+            model_name=OPENAI_MODEL,
+            temperature=0.0
         )
         
         # Initialize reranker if enabled
@@ -180,27 +187,25 @@ class RetrievalSystem:
         
         return "\n".join(formatted_parts)
     
-    # LLM response generation temporarily disabled
-    # def generate_response(...) - will be re-enabled later
-    
     def retrieve_and_generate(
         self,
         query: str,
         intent: str,
         disease_query: Optional[str] = None,
-        scheme_query: Optional[str] = None
+        scheme_query: Optional[str] = None,
+        conversation_history: Optional[List[Dict[str, str]]] = None
     ) -> Dict[str, Any]:
-        """Retrieve documents from vector database (with reranking).
-        Note: LLM response generation is temporarily disabled.
+        """Complete RAG pipeline: retrieve documents and generate response.
         
         Args:
             query: Original user query
             intent: Query intent (disease, scheme, or hybrid)
             disease_query: Disease-focused query (for hybrid)
             scheme_query: Scheme-focused query (for hybrid)
+            conversation_history: Optional conversation history for context
             
         Returns:
-            Dictionary with retrieved documents and metadata
+            Dictionary with response, retrieved documents, and metadata
         """
         disease_docs = None
         scheme_docs = None
@@ -209,10 +214,24 @@ class RetrievalSystem:
         if intent == "disease":
             disease_docs = self.retrieve_disease(query)
             context = self.format_documents(disease_docs)
+            response = self.response_generator.generate_response(
+                query=query,
+                context=context,
+                intent=intent,
+                disease_docs=disease_docs,
+                conversation_history=conversation_history
+            )
             
         elif intent == "scheme":
             scheme_docs = self.retrieve_scheme(query)
             context = self.format_documents(scheme_docs)
+            response = self.response_generator.generate_response(
+                query=query,
+                context=context,
+                intent=intent,
+                scheme_docs=scheme_docs,
+                conversation_history=conversation_history
+            )
             
         elif intent == "hybrid":
             if not disease_query or not scheme_query:
@@ -226,11 +245,20 @@ class RetrievalSystem:
             disease_context = self.format_documents(disease_docs)
             scheme_context = self.format_documents(scheme_docs)
             context = f"DISEASE/PEST INFORMATION:\n{disease_context}\n\nGOVERNMENT SCHEMES INFORMATION:\n{scheme_context}"
+            
+            response = self.response_generator.generate_response(
+                query=query,
+                context=context,
+                intent=intent,
+                disease_docs=disease_docs,
+                scheme_docs=scheme_docs,
+                conversation_history=conversation_history
+            )
         else:
             raise ValueError(f"Unknown intent: {intent}")
         
         return {
-            "response": None,  # LLM response generation disabled for now
+            "response": response,
             "disease_docs": disease_docs,
             "scheme_docs": scheme_docs,
             "context": context,

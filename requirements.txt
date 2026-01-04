@@ -1,0 +1,19 @@
+# Core dependencies
+langchain
+langchain-community
+langchain-huggingface
+langchain-pinecone
+
+# Hugging Face embeddings
+sentence-transformers
+torch
+
+# Vector database
+pinecone-client
+
+# Environment management
+python-dotenv
+
+# Utilities
+tqdm
+

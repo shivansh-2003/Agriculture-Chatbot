@@ -4,9 +4,9 @@ Phase 1: Document Processing & Vector Store Creation
 Ingestion pipeline for Agriculture Chatbot
 
 This script:
-1. Loads and parses PDF documents
+1. Loads and parses text documents (.txt files)
 2. Implements intelligent text chunking (500-1000 tokens with overlap)
-3. Generates embeddings using OpenAI or other embedding models
+3. Generates embeddings using Hugging Face embedding models
 4. Stores embeddings in Pinecone vector database
 5. Creates separate collections for:
    - Citrus Pests & Diseases knowledge base
@@ -19,9 +19,9 @@ from pathlib import Path
 from typing import List, Dict, Any
 from dotenv import load_dotenv
 
-from langchain_community.document_loaders import PyPDFLoader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_openai import OpenAIEmbeddings
+from langchain_community.document_loaders import TextLoader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_pinecone import PineconeVectorStore
 from pinecone import Pinecone, ServerlessSpec
 import tqdm
@@ -32,12 +32,12 @@ load_dotenv()
 # Configuration
 CHUNK_SIZE = 1000  # tokens (approximately 1000 chars for English)
 CHUNK_OVERLAP = 200  # tokens for overlap
-EMBEDDING_MODEL = "text-embedding-3-small"  # or "text-embedding-ada-002"
+EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"  # Hugging Face embedding model
 
-# PDF documents
-PDF_DIR = Path(__file__).parent.parent
-CITRUS_PDF = PDF_DIR / "CitrusPlantPestsAndDiseases.pdf"
-SCHEMES_PDF = PDF_DIR / "GovernmentSchemes.pdf"
+# Text documents
+TEXT_DIR = Path(__file__).parent.parent
+CITRUS_TXT = TEXT_DIR / "CitrusPlantPestsAndDiseases.txt"
+SCHEMES_TXT = TEXT_DIR / "GovernmentSchemes.txt"
 
 # Pinecone configuration
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
@@ -75,15 +75,15 @@ def create_pinecone_index(pc: Pinecone, index_name: str, dimension: int = 1536):
     else:
         print(f"Index {index_name} already exists")
 
-def load_pdf(pdf_path: Path) -> List[Any]:
-    """Load PDF document using LangChain PyPDFLoader."""
-    if not pdf_path.exists():
-        raise FileNotFoundError(f"PDF not found: {pdf_path}")
+def load_text_file(txt_path: Path) -> List[Any]:
+    """Load text file using LangChain TextLoader."""
+    if not txt_path.exists():
+        raise FileNotFoundError(f"Text file not found: {txt_path}")
     
-    print(f"Loading PDF: {pdf_path.name}")
-    loader = PyPDFLoader(str(pdf_path))
+    print(f"Loading text file: {txt_path.name}")
+    loader = TextLoader(str(txt_path), encoding="utf-8")
     documents = loader.load()
-    print(f"Loaded {len(documents)} pages from {pdf_path.name}")
+    print(f"Loaded {len(documents)} document(s) from {txt_path.name}")
     
     return documents
 
@@ -119,30 +119,31 @@ def add_metadata_to_chunks(chunks: List[Any], source_name: str, collection_type:
     return chunks
 
 def ingest_documents(
-    pdf_path: Path,
+    txt_path: Path,
     index_name: str,
     collection_type: str,
-    embeddings: OpenAIEmbeddings,
-    pc: Pinecone
+    embeddings: HuggingFaceEmbeddings,
+    pc: Pinecone,
+    embedding_dimension: int
 ):
     """Ingest documents into Pinecone."""
     print(f"\n{'='*60}")
-    print(f"Processing: {pdf_path.name}")
+    print(f"Processing: {txt_path.name}")
     print(f"Collection: {collection_type}")
     print(f"Index: {index_name}")
     print(f"{'='*60}\n")
     
-    # Load PDF
-    documents = load_pdf(pdf_path)
+    # Load text file
+    documents = load_text_file(txt_path)
     
     # Chunk documents
     chunks = chunk_documents(documents, CHUNK_SIZE, CHUNK_OVERLAP)
     
     # Add metadata
-    chunks = add_metadata_to_chunks(chunks, pdf_path.name, collection_type)
+    chunks = add_metadata_to_chunks(chunks, txt_path.name, collection_type)
     
     # Create or get index
-    create_pinecone_index(pc, index_name, dimension=1536)  # OpenAI embeddings dimension
+    create_pinecone_index(pc, index_name, dimension=embedding_dimension)
     
     # Initialize Pinecone vector store
     print(f"Initializing Pinecone vector store for {index_name}...")
@@ -161,36 +162,46 @@ def main():
     print("="*60)
     
     # Check for required environment variables
-    if not os.getenv("OPENAI_API_KEY"):
-        raise ValueError("OPENAI_API_KEY not found in environment variables")
-    
     if not PINECONE_API_KEY:
         raise ValueError("PINECONE_API_KEY not found in environment variables")
     
-    # Initialize embeddings
-    print("Initializing embeddings model...")
-    embeddings = OpenAIEmbeddings(model=EMBEDDING_MODEL)
+    # Initialize embeddings (Hugging Face - no API key needed)
+    print("Initializing Hugging Face embeddings model...")
+    print(f"Model: {EMBEDDING_MODEL}")
+    embeddings = HuggingFaceEmbeddings(
+        model_name=EMBEDDING_MODEL,
+        model_kwargs={'device': 'cpu'},  # Use 'cuda' if GPU available
+        encode_kwargs={'normalize_embeddings': True}  # Normalize for better cosine similarity
+    )
+    
+    # Get embedding dimension (test once)
+    print("Detecting embedding dimension...")
+    test_embedding = embeddings.embed_query("test")
+    embedding_dimension = len(test_embedding)
+    print(f"Embedding dimension: {embedding_dimension}")
     
     # Initialize Pinecone
     print("Initializing Pinecone client...")
     pc = initialize_pinecone()
     
-    # Ingest Citrus Pests & Diseases PDF
+    # Ingest Citrus Pests & Diseases text file
     citrus_vectorstore = ingest_documents(
-        pdf_path=CITRUS_PDF,
+        txt_path=CITRUS_TXT,
         index_name=PINECONE_INDEX_NAME_CITRUS,
         collection_type="citrus_diseases_pests",
         embeddings=embeddings,
-        pc=pc
+        pc=pc,
+        embedding_dimension=embedding_dimension
     )
     
-    # Ingest Government Schemes PDF
+    # Ingest Government Schemes text file
     schemes_vectorstore = ingest_documents(
-        pdf_path=SCHEMES_PDF,
+        txt_path=SCHEMES_TXT,
         index_name=PINECONE_INDEX_NAME_SCHEMES,
         collection_type="government_schemes",
         embeddings=embeddings,
-        pc=pc
+        pc=pc,
+        embedding_dimension=embedding_dimension
     )
     
     print("\n" + "="*60)

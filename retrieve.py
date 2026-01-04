@@ -19,14 +19,14 @@ from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_pinecone import PineconeVectorStore
 from langchain_core.documents import Document
 from langchain_community.document_compressors import FlashrankRerank
+from langsmith import traceable
 from response import ResponseGenerator
 
 # Load environment variables
 load_dotenv()
 
 # Configuration
-OPENAI_MODEL = "gpt-4"
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+OLLAMA_MODEL = "gpt-oss:20b"  # Ollama model for LLM
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 
 # Pinecone index names (from ingest.py)
@@ -47,12 +47,10 @@ class RetrievalSystem:
     
     def __init__(self):
         """Initialize the retrieval system with vector stores and LLM."""
-        if not OPENAI_API_KEY:
-            raise ValueError("OPENAI_API_KEY not found in environment variables")
         if not PINECONE_API_KEY:
             raise ValueError("PINECONE_API_KEY not found in environment variables")
         
-        # Initialize OpenAI embeddings
+        # Initialize OpenAI embeddings (keeping OpenAI for embeddings)
         self.embeddings = OpenAIEmbeddings(
             model=EMBEDDING_MODEL
         )
@@ -68,9 +66,9 @@ class RetrievalSystem:
             embedding=self.embeddings
         )
         
-        # Initialize response generator
+        # Initialize response generator (using Ollama for LLM)
         self.response_generator = ResponseGenerator(
-            model_name=OPENAI_MODEL,
+            model_name=OLLAMA_MODEL,
             temperature=0.0
         )
         
@@ -89,6 +87,7 @@ class RetrievalSystem:
                 print(f"Warning: FlashrankRerank not available. Reranking disabled. Error: {e}")
                 self.use_reranking = False
     
+    @traceable(name="retrieval_system.retrieve_disease")
     def retrieve_disease(self, query: str, k: int = K_RETRIEVAL) -> List[Document]:
         """Retrieve relevant documents from Citrus Pests & Diseases knowledge base.
         
@@ -97,24 +96,35 @@ class RetrievalSystem:
             k: Number of documents to retrieve initially (before reranking)
             
         Returns:
-            List of retrieved documents (reranked if enabled)
+            List of retrieved documents (reranked if enabled) with similarity scores in metadata
         """
-        # Create base retriever
-        base_retriever = self.citrus_vectorstore.as_retriever(
-            search_type="similarity",
-            search_kwargs={"k": k}
+        # Use similarity_search_with_score to get scores
+        results_with_scores = self.citrus_vectorstore.similarity_search_with_score(
+            query,
+            k=k
         )
         
-        # Retrieve documents
-        docs = base_retriever.invoke(query)
+        # Convert to Document objects with scores in metadata
+        docs = []
+        for doc, score in results_with_scores:
+            # Pinecone returns cosine similarity scores (0-1 range for normalized embeddings)
+            # Use score directly as confidence (already normalized to 0-1)
+            confidence = float(score)
+            
+            # Add score/confidence to metadata
+            doc.metadata["similarity_score"] = float(score)
+            doc.metadata["confidence"] = confidence
+            docs.append(doc)
         
         # Apply reranking if enabled
         if self.compressor and self.use_reranking:
             # Use compressor to rerank documents
             docs = self.compressor.compress_documents(documents=docs, query=query)
+            # Note: Reranking may change order, but original scores are still in metadata
         
         return docs
     
+    @traceable(name="retrieval_system.retrieve_scheme")
     def retrieve_scheme(self, query: str, k: int = K_RETRIEVAL) -> List[Document]:
         """Retrieve relevant documents from Government Schemes knowledge base.
         
@@ -123,21 +133,31 @@ class RetrievalSystem:
             k: Number of documents to retrieve initially (before reranking)
             
         Returns:
-            List of retrieved documents (reranked if enabled)
+            List of retrieved documents (reranked if enabled) with similarity scores in metadata
         """
-        # Create base retriever
-        base_retriever = self.schemes_vectorstore.as_retriever(
-            search_type="similarity",
-            search_kwargs={"k": k}
+        # Use similarity_search_with_score to get scores
+        results_with_scores = self.schemes_vectorstore.similarity_search_with_score(
+            query,
+            k=k
         )
         
-        # Retrieve documents
-        docs = base_retriever.invoke(query)
+        # Convert to Document objects with scores in metadata
+        docs = []
+        for doc, score in results_with_scores:
+            # Pinecone returns cosine similarity scores (0-1 range for normalized embeddings)
+            # Use score directly as confidence (already normalized to 0-1)
+            confidence = float(score)
+            
+            # Add score/confidence to metadata
+            doc.metadata["similarity_score"] = float(score)
+            doc.metadata["confidence"] = confidence
+            docs.append(doc)
         
         # Apply reranking if enabled
         if self.compressor and self.use_reranking:
             # Use compressor to rerank documents
             docs = self.compressor.compress_documents(documents=docs, query=query)
+            # Note: Reranking may change order, but original scores are still in metadata
         
         return docs
     
@@ -166,13 +186,13 @@ class RetrievalSystem:
         }
     
     def format_documents(self, docs: List[Document]) -> str:
-        """Format retrieved documents into context string.
+        """Format retrieved documents into context string with citations.
         
         Args:
-            docs: List of Document objects
+            docs: List of Document objects with metadata (including confidence and page_number)
             
         Returns:
-            Formatted context string
+            Formatted context string with citations including page numbers and confidence scores
         """
         if not docs:
             return "No relevant information found."
@@ -182,11 +202,21 @@ class RetrievalSystem:
             content = doc.page_content.strip()
             metadata = doc.metadata
             source = metadata.get("source", "Unknown")
+            page_number = metadata.get("page_number") or metadata.get("page")
+            confidence = metadata.get("confidence", 0.0)
             
-            formatted_parts.append(f"[Source {i}: {source}]\n{content}\n")
+            # Format citation with page number and confidence
+            citation_parts = [f"Source {i}: {source}"]
+            if page_number is not None:
+                citation_parts.append(f"Page {page_number}")
+            citation_parts.append(f"Confidence: {confidence:.2%}")
+            citation = " | ".join(citation_parts)
+            
+            formatted_parts.append(f"[{citation}]\n{content}\n")
         
         return "\n".join(formatted_parts)
     
+    @traceable(name="retrieval_system.retrieve_and_generate")
     def retrieve_and_generate(
         self,
         query: str,

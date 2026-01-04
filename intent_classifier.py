@@ -15,15 +15,16 @@ from typing import Literal
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field, ConfigDict
 
-from langchain_openai import ChatOpenAI
+from langchain_ollama import ChatOllama
 from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.output_parsers import JsonOutputParser
+from langsmith import traceable
 
 # Load environment variables
 load_dotenv()
 
-# OpenAI Configuration
-OPENAI_MODEL = "gpt-4"  # Using GPT-4 for intent classification
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+# Ollama Configuration
+OLLAMA_MODEL = "gpt-oss:20b"  # Using Ollama for intent classification
 
 # Intent types
 IntentType = Literal["disease", "scheme", "hybrid"]
@@ -101,35 +102,47 @@ Your task is to classify farmer queries into one of three categories:
 - If the query asks about financial help for managing a disease/pest → classify as "hybrid"
 - When in doubt, consider the primary need: if the main question is about disease/pest, choose "disease"; if about schemes, choose "scheme"; if it bridges both, choose "hybrid"
 
+**IMPORTANT: You MUST respond with valid JSON only, in this exact format:**
+{
+  "query": "the original user query",
+  "intent": "disease" or "scheme" or "hybrid",
+  "confidence": 0.0 to 1.0,
+  "reasoning": "brief explanation"
+}
+
 Classify the following query and provide your reasoning.
 """
 
 
 class IntentClassifier:
-    """Intent classifier using OpenAI GPT-4 with structured output."""
+    """Intent classifier using Ollama LLM with structured output."""
     
-    def __init__(self, model_name: str = OPENAI_MODEL, temperature: float = 0.0):
+    def __init__(self, model_name: str = OLLAMA_MODEL, temperature: float = 0.0):
         """Initialize the intent classifier.
         
         Args:
-            model_name: OpenAI model to use (default: gpt-4)
+            model_name: Ollama model to use (default: gpt-oss:20b)
             temperature: Temperature for generation (default: 0.0 for deterministic classification)
         """
-        if not OPENAI_API_KEY:
-            raise ValueError("OPENAI_API_KEY not found in environment variables")
-        
-        self.llm = ChatOpenAI(
+        self.llm = ChatOllama(
             model=model_name,
             temperature=temperature
         )
         
-        # Create structured output chain
-        # Using function_calling method (GPT-4 doesn't support json_schema method)
-        self.structured_llm = self.llm.with_structured_output(
-            IntentClassification,
-            method="function_calling"
-        )
+        # Create JSON parser as fallback
+        self.json_parser = JsonOutputParser(pydantic_object=IntentClassification)
+        
+        # Try structured output, but we'll use JSON parser as fallback
+        try:
+            self.structured_llm = self.llm.with_structured_output(
+                IntentClassification,
+                method="json_schema"
+            )
+        except Exception:
+            # Fallback to regular LLM with JSON parser
+            self.structured_llm = None
     
+    @traceable(name="intent_classifier.classify")
     def classify(self, query: str) -> dict:
         """Classify a query into disease, scheme, or hybrid intent.
         
@@ -145,16 +158,52 @@ class IntentClassifier:
             HumanMessage(content=f"Farmer Query: {query}")
         ]
         
-        # Get structured output
-        result = self.structured_llm.invoke(messages)
+        # Try structured output first
+        try:
+            if self.structured_llm:
+                result = self.structured_llm.invoke(messages)
+                # Convert Pydantic model to dict
+                return {
+                    "query": result.query,
+                    "intent": result.intent,
+                    "confidence": result.confidence,
+                    "reasoning": result.reasoning
+                }
+        except Exception as e:
+            print(f"⚠️  Structured output failed: {e}, trying JSON parser fallback...")
         
-        # Convert Pydantic model to dict
-        return {
-            "query": result.query,
-            "intent": result.intent,
-            "confidence": result.confidence,
-            "reasoning": result.reasoning
-        }
+        # Fallback: Use regular LLM with JSON parser
+        try:
+            response = self.llm.invoke(messages)
+            # Parse JSON from response
+            result_dict = self.json_parser.parse(response.content)
+            # Validate and return
+            return {
+                "query": result_dict.get("query", query),
+                "intent": result_dict.get("intent", "disease"),  # Default to disease
+                "confidence": float(result_dict.get("confidence", 0.8)),
+                "reasoning": result_dict.get("reasoning", "Classification completed")
+            }
+        except Exception as e:
+            print(f"⚠️  JSON parsing failed: {e}, using default classification...")
+            # Ultimate fallback: simple keyword-based classification
+            query_lower = query.lower()
+            if any(word in query_lower for word in ["scheme", "subsidy", "government", "financial", "assistance", "program"]):
+                if any(word in query_lower for word in ["disease", "pest", "canker", "treatment", "control", "symptom"]):
+                    intent = "hybrid"
+                else:
+                    intent = "scheme"
+            elif any(word in query_lower for word in ["disease", "pest", "canker", "treatment", "control", "symptom", "yellow", "leaf"]):
+                intent = "disease"
+            else:
+                intent = "disease"  # Default
+            
+            return {
+                "query": query,
+                "intent": intent,
+                "confidence": 0.7,
+                "reasoning": f"Fallback classification based on keywords"
+            }
     
     def classify_batch(self, queries: list[str]) -> list[dict]:
         """Classify multiple queries.

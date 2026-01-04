@@ -14,15 +14,16 @@ from typing import Literal
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field, ConfigDict
 
-from langchain_openai import ChatOpenAI
+from langchain_ollama import ChatOllama
 from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.output_parsers import JsonOutputParser
+from langsmith import traceable
 
 # Load environment variables
 load_dotenv()
 
-# OpenAI Configuration
-OPENAI_MODEL = "gpt-4"  # Using GPT-4 for query rewriting
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+# Ollama Configuration
+OLLAMA_MODEL = "gpt-oss:20b"  # Using Ollama for query rewriting
 
 
 class RewrittenQueries(BaseModel):
@@ -79,34 +80,46 @@ Original Query: "Tell me about Citrus Canker and available government schemes"
 - Preserve the core intent and meaning of the original query
 - Make queries specific enough to retrieve relevant information from each knowledge base
 
+**IMPORTANT: You MUST respond with valid JSON only, in this exact format:**
+{
+  "disease_query": "the disease-focused query",
+  "scheme_query": "the scheme-focused query",
+  "reasoning": "brief explanation of how the query was split"
+}
+
 Rewrite the following hybrid query into two focused queries.
 """
 
 
 class QueryRewriter:
-    """Query rewriter for hybrid intent queries using OpenAI GPT-4 with structured output."""
+    """Query rewriter for hybrid intent queries using Ollama LLM with structured output."""
     
-    def __init__(self, model_name: str = OPENAI_MODEL, temperature: float = 0.0):
+    def __init__(self, model_name: str = OLLAMA_MODEL, temperature: float = 0.0):
         """Initialize the query rewriter.
         
         Args:
-            model_name: OpenAI model to use (default: gpt-4)
+            model_name: Ollama model to use (default: gpt-oss:20b)
             temperature: Temperature for generation (default: 0.0 for deterministic rewriting)
         """
-        if not OPENAI_API_KEY:
-            raise ValueError("OPENAI_API_KEY not found in environment variables")
-        
-        self.llm = ChatOpenAI(
+        self.llm = ChatOllama(
             model=model_name,
             temperature=temperature
         )
         
-        # Create structured output chain
-        self.structured_llm = self.llm.with_structured_output(
-            RewrittenQueries,
-            method="function_calling"
-        )
+        # Create JSON parser as fallback
+        self.json_parser = JsonOutputParser(pydantic_object=RewrittenQueries)
+        
+        # Try structured output, but we'll use JSON parser as fallback
+        try:
+            self.structured_llm = self.llm.with_structured_output(
+                RewrittenQueries,
+                method="json_schema"
+            )
+        except Exception:
+            # Fallback to regular LLM with JSON parser
+            self.structured_llm = None
     
+    @traceable(name="query_rewriter.rewrite")
     def rewrite(self, query: str) -> dict:
         """Rewrite a hybrid intent query into two focused queries.
         
@@ -122,15 +135,46 @@ class QueryRewriter:
             HumanMessage(content=f"Original Hybrid Query: {query}")
         ]
         
-        # Get structured output
-        result = self.structured_llm.invoke(messages)
+        # Try structured output first
+        try:
+            if self.structured_llm:
+                result = self.structured_llm.invoke(messages)
+                # Convert Pydantic model to dict
+                return {
+                    "disease_query": result.disease_query,
+                    "scheme_query": result.scheme_query,
+                    "reasoning": result.reasoning
+                }
+        except Exception as e:
+            print(f"⚠️  Structured output failed: {e}, trying JSON parser fallback...")
         
-        # Convert Pydantic model to dict
-        return {
-            "disease_query": result.disease_query,
-            "scheme_query": result.scheme_query,
-            "reasoning": result.reasoning
-        }
+        # Fallback: Use regular LLM with JSON parser
+        try:
+            response = self.llm.invoke(messages)
+            # Parse JSON from response
+            result_dict = self.json_parser.parse(response.content)
+            # Validate and return
+            return {
+                "disease_query": result_dict.get("disease_query", query),
+                "scheme_query": result_dict.get("scheme_query", query),
+                "reasoning": result_dict.get("reasoning", "Query rewritten into two focused queries")
+            }
+        except Exception as e:
+            print(f"⚠️  JSON parsing failed: {e}, using simple fallback...")
+            # Ultimate fallback: simple split based on keywords
+            query_lower = query.lower()
+            # Extract disease-related parts
+            disease_keywords = ["disease", "pest", "canker", "treatment", "control", "symptom", "prevent", "manage"]
+            scheme_keywords = ["scheme", "subsidy", "government", "financial", "assistance", "support", "program"]
+            
+            disease_query = query if any(kw in query_lower for kw in disease_keywords) else f"What diseases or pests are mentioned in: {query}"
+            scheme_query = query if any(kw in query_lower for kw in scheme_keywords) else f"What government schemes are available for: {query}"
+            
+            return {
+                "disease_query": disease_query,
+                "scheme_query": scheme_query,
+                "reasoning": "Fallback rewriting based on keyword extraction"
+            }
 
 
 def main():

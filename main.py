@@ -18,6 +18,7 @@ from dotenv import load_dotenv
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import InMemorySaver
 from langchain_core.messages import HumanMessage, AIMessage
+from langsmith import traceable
 
 from intent_classifier import IntentClassifier
 from query_rewriter import QueryRewriter
@@ -25,6 +26,17 @@ from retrieve import RetrievalSystem
 
 # Load environment variables
 load_dotenv()
+
+# LangSmith tracing is automatically enabled when LANGSMITH_TRACING=true is set
+# Check if tracing is enabled
+
+LANGSMITH_TRACING = os.getenv("LANGSMITH_TRACING", "false").lower() == "true"
+if LANGSMITH_TRACING:
+    print("✅ LangSmith tracing enabled")
+    print(f"   LangSmith API Key: {'Set' if os.getenv('LANGSMITH_API_KEY') else 'Not Set'}")
+    print(f"   Workspace ID: {os.getenv('LANGSMITH_WORKSPACE_ID', 'Default')}")
+else:
+    print("⚠️  LangSmith tracing is disabled. Set LANGSMITH_TRACING=true to enable.")
 
 
 class AgentState(TypedDict):
@@ -123,6 +135,7 @@ class AgricultureChatbotGraph:
         
         return workflow
     
+    @traceable(name="classify_intent_node")
     def _classify_intent_node(self, state: AgentState) -> AgentState:
         """Node: Classify the user query intent.
         
@@ -163,6 +176,7 @@ class AgricultureChatbotGraph:
         
         return state_update
     
+    @traceable(name="rewrite_query_node")
     def _rewrite_query_node(self, state: AgentState) -> AgentState:
         """Node: Rewrite hybrid query into two focused queries.
         
@@ -210,6 +224,7 @@ class AgricultureChatbotGraph:
             # Default to hybrid if intent is unclear
             return "hybrid"
     
+    @traceable(name="retrieve_and_generate_node")
     def _retrieve_and_generate_node(self, state: AgentState) -> AgentState:
         """Node: Retrieve relevant documents and generate response.
         
@@ -323,6 +338,19 @@ def main():
     print("🚀 Agriculture Chatbot - LangGraph Workflow Test")
     print("="*80)
     
+    # Check LangSmith configuration
+    if LANGSMITH_TRACING:
+        print("\n📊 LangSmith Observability:")
+        print(f"   ✅ Tracing: Enabled")
+        print(f"   🔑 API Key: {'✅ Set' if os.getenv('LANGSMITH_API_KEY') else '❌ Not Set'}")
+        workspace_id = os.getenv('LANGSMITH_WORKSPACE_ID', 'Default')
+        print(f"   🏢 Workspace: {workspace_id}")
+        print(f"   📈 View traces at: https://smith.langchain.com")
+        print()
+    else:
+        print("\n⚠️  LangSmith tracing is disabled. Set LANGSMITH_TRACING=true to enable.")
+        print()
+    
     # Initialize the graph
     chatbot = AgricultureChatbotGraph()
     
@@ -331,15 +359,10 @@ def main():
     
     # Test queries covering all three intent types
     test_queries = [
-        # Disease Intent
-        "My citrus leaves are showing yellow blotchy patches. What could this be?",
-        
-        # Scheme Intent
-        "What government schemes are available for citrus farmers in Andhra Pradesh?",
         
         # Hybrid Intent
         "Can I get government support for setting up drip irrigation to prevent root diseases?",
-        "What schemes can help me manage Citrus Canker?",
+       
     ]
     
     print("\nTesting LangGraph Workflow:\n")

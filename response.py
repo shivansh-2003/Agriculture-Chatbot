@@ -10,36 +10,34 @@ import os
 from typing import List, Dict, Any, Optional
 from dotenv import load_dotenv
 
-from langchain_openai import ChatOpenAI
+from langchain_ollama import ChatOllama
 from langchain_core.documents import Document
 from langchain_core.prompts import ChatPromptTemplate
+from langsmith import traceable
 
 # Load environment variables
 load_dotenv()
 
 # Configuration
-OPENAI_MODEL = "gpt-4"
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+OLLAMA_MODEL = "gpt-oss:20b"  # Ollama model
 
 
 class ResponseGenerator:
-    """Response generator for agriculture chatbot using OpenAI LLM."""
+    """Response generator for agriculture chatbot using Ollama LLM."""
     
-    def __init__(self, model_name: str = OPENAI_MODEL, temperature: float = 0.0):
+    def __init__(self, model_name: str = OLLAMA_MODEL, temperature: float = 0.0):
         """Initialize the response generator.
         
         Args:
-            model_name: OpenAI model to use (default: gpt-4)
+            model_name: Ollama model to use (default: gpt-oss:20b)
             temperature: Temperature for generation (default: 0.0 for consistent responses)
         """
-        if not OPENAI_API_KEY:
-            raise ValueError("OPENAI_API_KEY not found in environment variables")
-        
-        self.llm = ChatOpenAI(
+        self.llm = ChatOllama(
             model=model_name,
             temperature=temperature
         )
     
+    @traceable(name="response_generator.generate_response")
     def generate_response(
         self,
         query: str,
@@ -158,13 +156,13 @@ Please provide a comprehensive response based on the retrieved information.""")
         return response.content
     
     def _format_documents_for_prompt(self, docs: List[Document]) -> str:
-        """Format documents for prompt (simpler format than format_documents).
+        """Format documents for prompt with citations including page numbers and confidence.
         
         Args:
-            docs: List of Document objects
+            docs: List of Document objects with metadata (including confidence and page_number)
             
         Returns:
-            Formatted string for prompt
+            Formatted string for prompt with citations
         """
         if not docs:
             return "No relevant information found."
@@ -172,7 +170,19 @@ Please provide a comprehensive response based on the retrieved information.""")
         formatted_parts = []
         for i, doc in enumerate(docs, 1):
             content = doc.page_content.strip()
-            formatted_parts.append(f"[Source {i}]\n{content}\n")
+            metadata = doc.metadata
+            source = metadata.get("source", "Unknown")
+            page_number = metadata.get("page_number") or metadata.get("page")
+            confidence = metadata.get("confidence", 0.0)
+            
+            # Format citation with page number and confidence
+            citation_parts = [f"Source {i}: {source}"]
+            if page_number is not None:
+                citation_parts.append(f"Page {page_number}")
+            citation_parts.append(f"Confidence: {confidence:.2%}")
+            citation = " | ".join(citation_parts)
+            
+            formatted_parts.append(f"[{citation}]\n{content}\n")
         
         return "\n".join(formatted_parts)
 

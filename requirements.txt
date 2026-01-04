@@ -3,6 +3,12 @@ langchain
 langchain-community
 langchain-huggingface
 langchain-pinecone
+langchain-openai
+langchain-core
+langgraph
+
+# Optional: For reranking (uncomment if needed)
+flashrank
 
 # Hugging Face embeddings
 sentence-transformers
@@ -13,6 +19,9 @@ pinecone-client
 
 # Environment management
 python-dotenv
+
+# Pydantic for structured output
+pydantic
 
 # Utilities
 tqdm

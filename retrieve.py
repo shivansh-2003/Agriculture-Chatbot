@@ -5,10 +5,9 @@ Retrieval and Response Generation for Agriculture Chatbot
 
 This module implements:
 1. Semantic search in vector stores using similarity metrics
-2. Retrieve top-k relevant chunks (k=3-5)
-3. Re-rank results for relevance (optional)
-4. Context assembly from retrieved chunks
-5. Generate farmer-friendly responses using LLM with retrieved context
+2. Retrieve top-k relevant chunks (k=5)
+3. Context assembly from retrieved chunks
+4. Generate farmer-friendly responses using LLM with retrieved context
 """
 
 import os
@@ -18,7 +17,6 @@ from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_pinecone import PineconeVectorStore
 from langchain_core.documents import Document
-from langchain_community.document_compressors import FlashrankRerank
 from langsmith import traceable
 from response import ResponseGenerator
 
@@ -38,9 +36,7 @@ PINECONE_INDEX_NAME_SCHEMES = "government-schemes"
 EMBEDDING_MODEL = "text-embedding-ada-002"
 
 # Retrieval parameters
-K_RETRIEVAL = 5  # Number of chunks to retrieve initially
-K_RERANK = 3  # Number of top chunks after reranking
-USE_RERANKING = True  # Enable reranking with FlashRank
+K_RETRIEVAL = 5  # Number of chunks to retrieve
 
 
 class RetrievalSystem:
@@ -72,21 +68,6 @@ class RetrievalSystem:
             model_name=OPENAI_MODEL,
             temperature=0.0
         )
-        
-        # Initialize reranker if enabled
-        self.compressor = None
-        self.use_reranking = USE_RERANKING
-        if self.use_reranking:
-            try:
-                from flashrank import Ranker
-                # Initialize FlashRank Ranker
-                ranker = Ranker(model_name="ms-marco-MiniLM-L-12-v2")
-                # Initialize FlashrankRerank compressor
-                self.compressor = FlashrankRerank(client=ranker, top_n=K_RERANK)
-                print("✅ FlashRank reranker initialized successfully")
-            except (ImportError, Exception) as e:
-                print(f"Warning: FlashrankRerank not available. Reranking disabled. Error: {e}")
-                self.use_reranking = False
     
     @traceable(name="retrieval_system.retrieve_disease")
     def retrieve_disease(self, query: str, k: int = K_RETRIEVAL) -> List[Document]:
@@ -94,10 +75,10 @@ class RetrievalSystem:
         
         Args:
             query: Search query
-            k: Number of documents to retrieve initially (before reranking)
+            k: Number of documents to retrieve
             
         Returns:
-            List of retrieved documents (reranked if enabled) with similarity scores in metadata
+            List of retrieved documents with similarity scores in metadata
         """
         # Use similarity_search_with_score to get scores
         results_with_scores = self.citrus_vectorstore.similarity_search_with_score(
@@ -117,12 +98,6 @@ class RetrievalSystem:
             doc.metadata["confidence"] = confidence
             docs.append(doc)
         
-        # Apply reranking if enabled
-        if self.compressor and self.use_reranking:
-            # Use compressor to rerank documents
-            docs = self.compressor.compress_documents(documents=docs, query=query)
-            # Note: Reranking may change order, but original scores are still in metadata
-        
         return docs
     
     @traceable(name="retrieval_system.retrieve_scheme")
@@ -131,10 +106,10 @@ class RetrievalSystem:
         
         Args:
             query: Search query
-            k: Number of documents to retrieve initially (before reranking)
+            k: Number of documents to retrieve
             
         Returns:
-            List of retrieved documents (reranked if enabled) with similarity scores in metadata
+            List of retrieved documents with similarity scores in metadata
         """
         # Use similarity_search_with_score to get scores
         results_with_scores = self.schemes_vectorstore.similarity_search_with_score(
@@ -153,12 +128,6 @@ class RetrievalSystem:
             doc.metadata["similarity_score"] = float(score)
             doc.metadata["confidence"] = confidence
             docs.append(doc)
-        
-        # Apply reranking if enabled
-        if self.compressor and self.use_reranking:
-            # Use compressor to rerank documents
-            docs = self.compressor.compress_documents(documents=docs, query=query)
-            # Note: Reranking may change order, but original scores are still in metadata
         
         return docs
     

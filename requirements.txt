@@ -1,18 +1,12 @@
 # Core dependencies
 langchain
 langchain-community
-langchain-huggingface
 langchain-pinecone
 langchain-openai
 langchain-core
 langgraph
 langsmith
-# Optional: For reranking (uncomment if needed)
-flashrank
 
-# Hugging Face embeddings
-sentence-transformers
-torch
 
 # Vector database
 pinecone-client

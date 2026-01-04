@@ -26,7 +26,8 @@ from response import ResponseGenerator
 load_dotenv()
 
 # Configuration
-OLLAMA_MODEL = "gpt-oss:20b"  # Ollama model for LLM
+OPENAI_MODEL = "gpt-4o-mini"  # OpenAI model for LLM
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 
 # Pinecone index names (from ingest.py)
@@ -66,9 +67,9 @@ class RetrievalSystem:
             embedding=self.embeddings
         )
         
-        # Initialize response generator (using Ollama for LLM)
+        # Initialize response generator (using OpenAI for LLM)
         self.response_generator = ResponseGenerator(
-            model_name=OLLAMA_MODEL,
+            model_name=OPENAI_MODEL,
             temperature=0.0
         )
         

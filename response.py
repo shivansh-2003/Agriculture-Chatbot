@@ -10,7 +10,7 @@ import os
 from typing import List, Dict, Any, Optional
 from dotenv import load_dotenv
 
-from langchain_ollama import ChatOllama
+from langchain_openai import ChatOpenAI
 from langchain_core.documents import Document
 from langchain_core.prompts import ChatPromptTemplate
 from langsmith import traceable
@@ -19,22 +19,27 @@ from langsmith import traceable
 load_dotenv()
 
 # Configuration
-OLLAMA_MODEL = "gpt-oss:20b"  # Ollama model
+OPENAI_MODEL = "gpt-4o-mini"  # OpenAI model
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 
 class ResponseGenerator:
-    """Response generator for agriculture chatbot using Ollama LLM."""
+    """Response generator for agriculture chatbot using OpenAI LLM."""
     
-    def __init__(self, model_name: str = OLLAMA_MODEL, temperature: float = 0.0):
+    def __init__(self, model_name: str = OPENAI_MODEL, temperature: float = 0.0):
         """Initialize the response generator.
         
         Args:
-            model_name: Ollama model to use (default: gpt-oss:20b)
+            model_name: OpenAI model to use (default: gpt-4o-mini)
             temperature: Temperature for generation (default: 0.0 for consistent responses)
         """
-        self.llm = ChatOllama(
+        if not OPENAI_API_KEY:
+            raise ValueError("OPENAI_API_KEY not found in environment variables")
+        
+        self.llm = ChatOpenAI(
             model=model_name,
-            temperature=temperature
+            temperature=temperature,
+            api_key=OPENAI_API_KEY
         )
     
     @traceable(name="response_generator.generate_response")

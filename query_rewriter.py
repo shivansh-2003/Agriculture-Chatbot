@@ -14,7 +14,7 @@ from typing import Literal
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field, ConfigDict
 
-from langchain_ollama import ChatOllama
+from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.output_parsers import JsonOutputParser
 from langsmith import traceable
@@ -22,8 +22,9 @@ from langsmith import traceable
 # Load environment variables
 load_dotenv()
 
-# Ollama Configuration
-OLLAMA_MODEL = "gpt-oss:20b"  # Using Ollama for query rewriting
+# OpenAI Configuration
+OPENAI_MODEL = "gpt-4o-mini"  # Using OpenAI for query rewriting
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 
 class RewrittenQueries(BaseModel):
@@ -92,28 +93,32 @@ Rewrite the following hybrid query into two focused queries.
 
 
 class QueryRewriter:
-    """Query rewriter for hybrid intent queries using Ollama LLM with structured output."""
+    """Query rewriter for hybrid intent queries using OpenAI LLM with structured output."""
     
-    def __init__(self, model_name: str = OLLAMA_MODEL, temperature: float = 0.0):
+    def __init__(self, model_name: str = OPENAI_MODEL, temperature: float = 0.0):
         """Initialize the query rewriter.
         
         Args:
-            model_name: Ollama model to use (default: gpt-oss:20b)
+            model_name: OpenAI model to use (default: gpt-4o-mini)
             temperature: Temperature for generation (default: 0.0 for deterministic rewriting)
         """
-        self.llm = ChatOllama(
+        if not OPENAI_API_KEY:
+            raise ValueError("OPENAI_API_KEY not found in environment variables")
+        
+        self.llm = ChatOpenAI(
             model=model_name,
-            temperature=temperature
+            temperature=temperature,
+            api_key=OPENAI_API_KEY
         )
         
         # Create JSON parser as fallback
         self.json_parser = JsonOutputParser(pydantic_object=RewrittenQueries)
         
-        # Try structured output, but we'll use JSON parser as fallback
+        # Try structured output with OpenAI (uses function calling)
         try:
             self.structured_llm = self.llm.with_structured_output(
                 RewrittenQueries,
-                method="json_schema"
+                method="function_calling"
             )
         except Exception:
             # Fallback to regular LLM with JSON parser

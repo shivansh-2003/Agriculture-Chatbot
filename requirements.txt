@@ -4,11 +4,9 @@ langchain-community
 langchain-huggingface
 langchain-pinecone
 langchain-openai
-langchain-ollama
 langchain-core
 langgraph
 langsmith
-
 # Optional: For reranking (uncomment if needed)
 flashrank
 

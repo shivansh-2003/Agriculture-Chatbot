@@ -1,5 +1,12 @@
 # Agriculture Chatbot for Farmers
 
+## Deployed URL 
+https://agriculture-chatbot-p23b.onrender.com/
+
+
+## Video Link 
+https://youtu.be/iyFT_ggFDKQ
+
 An intelligent backend application using FastAPI that helps farmers get accurate information about citrus diseases and government agricultural schemes through a conversational interface. Built with LangChain, LangGraph, and LangSmith for observability.
 
 ## 📋 Table of Contents
@@ -7,10 +14,12 @@ An intelligent backend application using FastAPI that helps farmers get accurate
 - [Project Overview](#project-overview)
 - [Architecture](#architecture)
 - [Setup and Installation](#setup-and-installation)
+- [Deployment to Render](#-deployment-to-render)
 - [Environment Variables](#environment-variables)
 - [API Documentation](#api-documentation)
 - [LangChain/LangGraph Workflow](#langchainlanggraph-workflow)
 - [Intent Detection and Routing](#intent-detection-and-routing)
+- [LangSmith Observability](#-langsmith-observability)
 - [Vector Database Choice](#vector-database-choice)
 - [Chunking Strategy](#chunking-strategy)
 - [Challenges and Solutions](#challenges-and-solutions)
@@ -82,7 +91,7 @@ graph TB
     end
     
     subgraph "LLM Services"
-        E --> N[Ollama: gpt-oss:20b]
+        E --> N[OpenAI: gpt-4o-mini]
         I --> N
         K --> N
     end
@@ -130,8 +139,7 @@ graph LR
     subgraph "Phase 3: RAG"
         I --> L[Semantic Search]
         J --> L
-        L --> M[FlashRank Reranking]
-        M --> N[Context Assembly]
+        L --> N[Context Assembly]
         N --> O[Response Generation]
     end
     
@@ -155,10 +163,9 @@ graph LR
 
 - **Python 3.9+**
 - **Virtual environment** (venv/conda)
-- **Ollama** installed and running locally
 - **API Keys**:
   - Pinecone API key
-  - OpenAI API key (for embeddings)
+  - OpenAI API key (for embeddings and LLM)
   - LangSmith API key (optional, for observability)
 
 ### Step 1: Clone and Setup
@@ -176,20 +183,7 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### Step 2: Setup Ollama
-
-```bash
-# Install Ollama (if not already installed)
-# Visit: https://ollama.ai
-
-# Pull the required model
-ollama pull gpt-oss:20b
-
-# Verify Ollama is running
-ollama list
-```
-
-### Step 3: Configure Environment
+### Step 2: Configure Environment
 
 ```bash
 # Copy example environment file
@@ -199,7 +193,7 @@ cp .env.example .env
 nano .env  # or use your preferred editor
 ```
 
-### Step 4: Ingest Documents
+### Step 3: Ingest Documents
 
 ```bash
 # Run the ingestion pipeline
@@ -212,7 +206,7 @@ This will:
 - Generate embeddings
 - Store in Pinecone vector database
 
-### Step 5: Start the API Server
+### Step 4: Start the API Server
 
 ```bash
 # Start FastAPI server
@@ -230,6 +224,63 @@ The API will be available at:
 
 ---
 
+## 🚀 Deployment to Render
+
+### Prerequisites
+- Render account ([sign up here](https://render.com))
+- All environment variables ready (see [Environment Variables](#-environment-variables))
+
+### Steps
+
+1. **Push your code to GitHub**
+   ```bash
+   git add .
+   git commit -m "Deploy to Render"
+   git push origin main
+   ```
+
+2. **Create a new Web Service on Render**
+   - Go to [Render Dashboard](https://dashboard.render.com)
+   - Click "New +" → "Web Service"
+   - Connect your GitHub repository
+   - Select the repository containing this project
+
+3. **Configure the service**
+   - **Name**: `agriculture-chatbot` (or your preferred name)
+   - **Environment**: `Docker`
+   - **Region**: Choose closest to your users
+   - **Branch**: `main` (or your deployment branch)
+   - **Root Directory**: Leave empty (or specify if code is in subdirectory)
+   - **Dockerfile Path**: `Dockerfile`
+   - **Docker Context**: `.` (root directory)
+
+4. **Set Environment Variables**
+   In Render dashboard, go to "Environment" tab and add:
+   ```
+   PINECONE_API_KEY=your_pinecone_api_key
+   OPENAI_API_KEY=your_openai_api_key
+   LANGSMITH_TRACING=true (optional)
+   LANGSMITH_API_KEY=your_langsmith_api_key (optional)
+   LANGSMITH_WORKSPACE_ID=your_workspace_id (optional)
+   LANGSMITH_PROJECT=agriculture-chatbot (optional)
+   PORT=8000
+   HOST=0.0.0.0
+   ```
+
+5. **Deploy**
+   - Click "Create Web Service"
+   - Render will build and deploy your Docker image
+   - Build logs will show progress
+   - Service will be available at: `https://your-service-name.onrender.com`
+
+6. **Access your deployed API**
+   - **API**: `https://your-service-name.onrender.com`
+   - **Swagger Docs**: `https://your-service-name.onrender.com/docs`
+   - **Health Check**: `https://your-service-name.onrender.com/health`
+
+
+---
+
 ## 🔐 Environment Variables
 
 All environment variables are documented in `.env.example`. Here's a summary:
@@ -239,7 +290,7 @@ All environment variables are documented in `.env.example`. Here's a summary:
 | Variable | Description | Where to Get |
 |----------|-------------|--------------|
 | `PINECONE_API_KEY` | Pinecone vector database API key | [app.pinecone.io](https://app.pinecone.io/) |
-| `OPENAI_API_KEY` | OpenAI API key for embeddings | [platform.openai.com](https://platform.openai.com/api-keys) |
+| `OPENAI_API_KEY` | OpenAI API key for embeddings and LLM | [platform.openai.com](https://platform.openai.com/api-keys) |
 
 ### Optional Variables
 
@@ -259,7 +310,7 @@ All environment variables are documented in `.env.example`. Here's a summary:
 # Vector Database
 PINECONE_API_KEY=your_pinecone_api_key_here
 
-# OpenAI (for embeddings)
+# OpenAI (for embeddings and LLM)
 OPENAI_API_KEY=your_openai_api_key_here
 
 # LangSmith (optional)
@@ -275,49 +326,10 @@ HOST=0.0.0.0
 
 ## 📡 API Documentation
 
-### Base URL
-
-```
-http://localhost:8000
-```
 
 ### Endpoints
 
-#### 1. Root Endpoint
-
-**GET** `/`
-
-Returns API information and available endpoints.
-
-**Response:**
-```json
-{
-  "message": "Agriculture Chatbot API",
-  "version": "1.0.0",
-  "docs": "/docs",
-  "health": "/health",
-  "endpoints": {
-    "POST /query": "Submit a farmer query",
-    "GET /health": "Health check"
-  }
-}
-```
-
-#### 2. Health Check
-
-**GET** `/health`
-
-Check API health status.
-
-**Response:**
-```json
-{
-  "status": "healthy",
-  "message": "API is operational and chatbot is ready"
-}
-```
-
-#### 3. Query Endpoint
+####  Query Endpoint
 
 **POST** `/query`
 
@@ -368,26 +380,6 @@ curl -X POST "http://localhost:8000/query" \
 }
 ```
 
-#### Scheme Intent
-
-```bash
-curl -X POST "http://localhost:8000/query" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "question": "What government schemes are available for citrus farmers in Andhra Pradesh?"
-  }'
-```
-
-#### Hybrid Intent
-
-```bash
-curl -X POST "http://localhost:8000/query" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "question": "Can I get government support for setting up drip irrigation to prevent root diseases?"
-  }'
-```
-
 **Expected Response:**
 ```json
 {
@@ -399,14 +391,6 @@ curl -X POST "http://localhost:8000/query" \
   "num_scheme_docs": 3
 }
 ```
-
-### Interactive API Documentation
-
-FastAPI automatically generates interactive API documentation:
-- **Swagger UI**: http://localhost:8000/docs
-- **ReDoc**: http://localhost:8000/redoc
-
----
 
 ## 🔄 LangChain/LangGraph Workflow
 
@@ -427,10 +411,8 @@ graph TD
     DiseaseQuery --> DiseaseRetrieve
     SchemeQuery --> SchemeRetrieve
     
-    DiseaseRetrieve --> Rerank[Rerank with FlashRank]
-    SchemeRetrieve --> Rerank
-    
-    Rerank --> Generate[Generate Response Node]
+    DiseaseRetrieve --> Generate[Generate Response Node]
+    SchemeRetrieve --> Generate
     
     Generate --> Format[Format with Citations]
     Format --> End([JSON Response])
@@ -457,43 +439,12 @@ graph TD
 3. **Document Retrieval** (`retrieve_and_generate_node`)
    - Performs semantic search in appropriate vector store(s)
    - Retrieves top-k documents (k=5)
-   - Reranks using FlashRank (top 3)
    - Formats context with citations
 
 4. **Response Generation** (`retrieve_and_generate_node`)
    - Generates farmer-friendly response using LLM
    - Includes source citations with page numbers
    - Includes confidence scores
-
-### State Management
-
-The workflow uses LangGraph's `AgentState` to manage conversation context:
-
-```python
-class AgentState(TypedDict):
-    messages: Annotated[list, add_messages]  # Conversation history
-    user_query: str
-    intent: Literal["disease", "scheme", "hybrid"] | None
-    confidence: float | None
-    reasoning: str | None
-    disease_query: str | None
-    scheme_query: str | None
-    response: str | None
-    # ... more fields
-```
-
-### Conversation History
-
-The system maintains conversation history using `InMemorySaver` checkpointer, allowing multi-turn interactions:
-
-```python
-# Same thread_id maintains conversation context
-result1 = chatbot.process_query("What is citrus canker?", thread_id="user-123")
-result2 = chatbot.process_query("What schemes help with it?", thread_id="user-123")
-# result2 will have context from result1
-```
-
----
 
 ## 🎯 Intent Detection and Routing
 
@@ -574,16 +525,59 @@ flowchart TD
 ### Implementation Details
 
 The intent classifier uses:
-- **LLM**: Ollama `gpt-oss:20b` model
-- **Structured Output**: Pydantic models for type safety
-- **Fallback Mechanisms**: 
-  - JSON parser fallback if structured output fails
-  - Keyword-based classification as ultimate fallback
+- **LLM**: OpenAI `gpt-4o-mini` model
+- **Structured Output**: Pydantic models with function calling for type safety
 
 **Confidence Thresholds:**
 - High confidence (>0.8): Direct routing
 - Medium confidence (0.6-0.8): Routing with caution
 - Low confidence (<0.6): Fallback to keyword-based classification
+
+---
+
+## 📊 LangSmith Observability
+
+The application uses LangSmith for end-to-end observability and tracing of the LangGraph workflow. This allows you to monitor and debug the entire agentic flow.
+
+### Setup
+
+1. **Create a LangSmith account** at [smith.langchain.com](https://smith.langchain.com)
+2. **Get your API key** from the settings page
+3. **Set environment variables**:
+   ```bash
+   LANGSMITH_TRACING=true
+   LANGSMITH_API_KEY=your_api_key_here
+   LANGSMITH_WORKSPACE_ID=your_workspace_id
+   LANGSMITH_PROJECT=agriculture-chatbot
+   ```
+
+### Trace Visualization
+
+LangSmith provides detailed traces showing:
+- **Intent Classification**: Query analysis and intent detection
+- **Query Rewriting**: Hybrid query splitting (when applicable)
+- **Document Retrieval**: Semantic search and retrieval steps
+- **Response Generation**: LLM response generation with context
+- **Timing Metrics**: Latency for each step
+- **Token Usage**: Token consumption per operation
+
+### Example Trace
+
+![LangSmith Trace](Screenshot%202026-01-04%20at%204.13.50%20PM.png)
+
+The trace shows a complete workflow execution for a hybrid intent query, including:
+- Intent classification (8.17s, 1,711 tokens)
+- Query rewriting (4.06s, 1,400 tokens)
+- Document retrieval from both knowledge bases (3.18s + 2.82s)
+- Response generation (18.39s, 2,575 tokens)
+- Total workflow time: 36.66s with 5,686 tokens
+
+### Viewing Traces
+
+1. Go to [LangSmith Dashboard](https://smith.langchain.com)
+2. Navigate to "Tracing" section
+3. Select your project (`agriculture-chatbot`)
+4. View individual traces with full details
 
 ---
 
@@ -626,14 +620,6 @@ We chose **Pinecone** as our vector database for the following reasons:
 | **Qdrant** | Open-source, good performance | Requires setup and maintenance | Prefer managed service |
 | **FAISS** | Fast, Facebook-backed | In-memory only, no persistence | Need persistent storage |
 
-### Index Configuration
-
-```python
-# Pinecone Index Settings
-dimension = 1536  # OpenAI text-embedding-ada-002
-metric = "cosine"  # Cosine similarity
-index_type = "serverless"  # Cost-effective
-```
 
 ### Separate Collections
 
@@ -654,25 +640,6 @@ This separation allows:
 ### Strategy Overview
 
 We use **RecursiveCharacterTextSplitter** with intelligent separators for optimal chunking.
-
-### Configuration
-
-```python
-CHUNK_SIZE = 1000  # tokens (approximately 1000 characters)
-CHUNK_OVERLAP = 200  # tokens for overlap
-```
-
-### Separator Hierarchy
-
-```python
-separators = [
-    "\n\n",  # Paragraph breaks (highest priority)
-    "\n",    # Line breaks
-    ". ",    # Sentence endings
-    " ",     # Word boundaries
-    ""       # Character level (fallback)
-]
-```
 
 ### Why This Strategy?
 
@@ -729,33 +696,7 @@ graph LR
 
 ## 🛠️ Challenges and Solutions
 
-### Challenge 1: Ollama Structured Output Issues
-
-**Problem:**
-- Ollama models don't reliably return JSON for structured output
-- `json_schema` method often fails
-- Empty responses or malformed JSON
-
-**Solution:**
-Implemented multi-level fallback mechanism:
-1. Try structured output with `json_schema`
-2. Fallback to JSON parser with raw LLM response
-3. Ultimate fallback: Keyword-based classification/rewriting
-
-```python
-# Fallback implementation
-try:
-    if self.structured_llm:
-        result = self.structured_llm.invoke(messages)
-        return result
-except Exception:
-    # Fallback to JSON parser
-    response = self.llm.invoke(messages)
-    result_dict = self.json_parser.parse(response.content)
-    return result_dict
-```
-
-### Challenge 2: Embedding Dimension Mismatch
+### Challenge 1: Embedding Dimension Mismatch
 
 **Problem:**
 - Switched from HuggingFace (384D) to OpenAI (1536D) embeddings
@@ -778,7 +719,7 @@ def create_pinecone_index(pc, index_name, dimension=1536):
             pc.create_index(name=index_name, dimension=dimension, ...)
 ```
 
-### Challenge 3: Document Serialization in LangGraph
+### Challenge 2: Document Serialization in LangGraph
 
 **Problem:**
 - `Document` objects cannot be serialized by `InMemorySaver`
@@ -802,7 +743,7 @@ self._temp_retrieval_result = {
 result["disease_docs"] = self._temp_retrieval_result.get("disease_docs")
 ```
 
-### Challenge 4: Table Data Formatting
+### Challenge 3: Table Data Formatting
 
 **Problem:**
 - PDF tables need conversion to natural language
@@ -814,18 +755,6 @@ Row-to-sentence conversion:
 - Convert each table row to a natural language sentence
 - Include both keys and values
 - Example: "MIDH Year-1 subsidy for 'Plant Material': unit cost ₹16,500, 60% subsidy (₹9,900), farmer share 40% (₹6,600)."
-
-### Challenge 5: Model Decommissioning
-
-**Problem:**
-- Groq model `llama-3.1-70b-versatile` was decommissioned
-- API calls failed with 400 errors
-- Need to switch to available model
-
-**Solution:**
-- Updated to `llama-3.3-70b-versatile`
-- Later switched to Ollama for local execution
-- Using `gpt-oss:20b` model
 
 ---
 
@@ -849,10 +778,9 @@ def get_chatbot():
 - Faster response times
 - Lower memory usage
 
-### 2. **Reranking Optimization**
+### 2. **Retrieval Optimization**
 
 - Initial retrieval: k=5 documents
-- Reranking: Top 3 documents
 - Reduces LLM context size
 - Improves response quality
 
@@ -1031,8 +959,8 @@ For questions or issues:
 
 - **LangChain/LangGraph**: For agentic AI framework
 - **Pinecone**: For vector database infrastructure
-- **OpenAI**: For embedding models
-- **Ollama**: For local LLM execution
+- **OpenAI**: For embedding models and LLM
+- **LangSmith**: For observability and tracing
 - **FastAPI**: For modern Python web framework
 
 ---

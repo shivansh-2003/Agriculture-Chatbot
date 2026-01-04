@@ -28,3 +28,8 @@ pydantic
 # Utilities
 tqdm
 
+# FastAPI and server
+fastapi
+uvicorn[standard]
+pydantic
+

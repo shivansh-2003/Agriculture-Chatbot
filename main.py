@@ -361,7 +361,7 @@ def main():
     test_queries = [
         
         # Hybrid Intent
-        "Can I get government support for setting up drip irrigation to prevent root diseases?",
+        "What government schemes are available for citrus farmers in Andhra Pradesh?",
        
     ]
     
